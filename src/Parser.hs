@@ -34,8 +34,31 @@ parseAtom = do
 parseNumber :: P.Parser LispVal
 parseNumber = P.many1 P.digit >>= return . Number . read
 
+parseList :: P.Parser LispVal
+parseList = P.sepBy parseExpr spaces >>= return . List
+
+parseDottedList :: P.Parser LispVal
+parseDottedList = do
+  head <- P.endBy parseExpr spaces
+  tail <- P.char '.' >> spaces >> parseExpr
+  return $ DottedList head tail
+
+parseQuoted :: P.Parser LispVal
+parseQuoted = do
+  _ <- P.char '\''
+  x <- parseExpr
+  return $ List [Atom "quote", x]
+
+parseSexp :: P.Parser LispVal
+parseSexp = do
+  _ <- P.char '('
+  x <- P.try parseList <|> parseDottedList
+  _ <- P.char ')'
+  return x
+
 parseExpr :: P.Parser LispVal
-parseExpr = parseAtom <|> parseString <|> parseNumber
+parseExpr =
+  parseAtom <|> parseString <|> parseNumber <|> parseQuoted <|> parseSexp
 
 symbol :: P.Parser Char
 symbol = P.oneOf "!#$%&|*+-/:<=>?@^_~"
