@@ -14,6 +14,18 @@ data LispVal = Atom String
              | String String
              | Bool Bool
 
+instance Show LispVal where
+  show (String contents) = "\"" ++ contents ++ "\""
+  show (Atom name) = name
+  show (Number contents) = show contents
+  show (Bool True) = "#t"
+  show (Bool False) = "#f"
+  show (List contents) = "(" ++ unwordsList contents ++ ")"
+  show (DottedList head tail) = "(" ++ unwordsList head ++ " . " ++ show tail ++ ")"
+
+unwordsList :: [LispVal] -> String
+unwordsList = unwords . map show
+
 parseString :: P.Parser LispVal
 parseString = do
   _ <- P.char '"'
@@ -69,5 +81,5 @@ spaces = P.skipMany1 P.space
 readExpr :: String -> String
 readExpr input = case P.parse parseExpr "lisp" input of
   Left  err -> "No match: " ++ show err
-  Right _   -> "Found value"
+  Right val -> "Found: " ++ show val
 
