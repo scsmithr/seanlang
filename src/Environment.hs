@@ -5,7 +5,7 @@ module Environment
   , LispError(..)
   , Env
   , IOThrowsError
-  , nullEnv
+  , primitiveBindings
   , liftIOThrows
   , primitives
   , eval
@@ -28,6 +28,9 @@ data LispVal = Atom String
              | Number Integer
              | String String
              | Bool Bool
+             | PrimitiveFunc ([LispVal] -> Either LispError LispVal)
+             | Func {params :: [String], vararg :: (Maybe String),
+                     body :: [LispVal], closure :: Env}
 
 showVal :: LispVal -> String
 showVal (String contents) = "\"" ++ contents ++ "\""
@@ -38,6 +41,15 @@ showVal (Bool   False   ) = "#f"
 showVal (List   contents) = "(" ++ unwordsList contents ++ ")"
 showVal (DottedList head tail) =
   "(" ++ unwordsList head ++ " . " ++ show tail ++ ")"
+showVal (PrimitiveFunc _) = "<primitive>"
+showVal (Func { params = args, vararg = varargs, body = body, closure = env })
+  = "(lambda ("
+    ++ unwords (map show args)
+    ++ (case varargs of
+         Nothing  -> ""
+         Just arg -> " . " ++ arg
+       )
+    ++ ") ...)"
 
 instance Show LispVal where show = showVal
 
@@ -54,7 +66,7 @@ showError (UnboundVar     message var ) = message ++ ": " ++ var
 showError (BadSpecialForm message form) = message ++ ": " ++ show form
 showError (NotFunction    message func) = message ++ ": " ++ show func
 showError (NumArgs expected found) =
-  "Expected " ++ show expected ++ " args, found values" ++ unwordsList found
+  "Expected " ++ show expected ++ " args, found values " ++ unwordsList found
 showError (TypeMismatch expected found) =
   "Invalid type: expected " ++ expected ++ ", found " ++ show found
 showError (Parser parseError) = "Parse error: " ++ show parseError
@@ -107,6 +119,19 @@ bindVars envRef bindings = readIORef envRef >>= extendEnv bindings >>= newIORef
   addBinding (var, value) = do
     ref <- newIORef value
     return (var, ref)
+
+primitiveBindings :: IO Env
+primitiveBindings =
+  nullEnv >>= (flip bindVars $ map makePrimitiveFunc primitives)
+  where makePrimitiveFunc (var, func) = (var, PrimitiveFunc func)
+
+makeFunc
+  :: Maybe String -> Env -> [LispVal] -> [LispVal] -> IOThrowsError LispVal
+makeFunc varargs env params body =
+  return $ Func (map showVal params) varargs body env
+
+makeNormalFunc = makeFunc Nothing
+makeVarArgs = makeFunc . Just . showVal
 
 primitives :: [(String, [LispVal] -> Either LispError LispVal)]
 primitives =
@@ -249,12 +274,36 @@ eval env (List [Atom "set!", Atom var, form]) =
   eval env form >>= setVar env var
 eval env (List [Atom "define", Atom var, form]) =
   eval env form >>= defineVar env var
-eval env (List (Atom func : args)) =
-  mapM (eval env) args >>= liftIOThrows . apply func
+eval env (List (Atom "define" : List (Atom var : params) : body)) =
+  makeNormalFunc env params body >>= defineVar env var
+eval env (List (Atom "define" : DottedList (Atom var : params) varargs : body))
+  = makeVarArgs varargs env params body >>= defineVar env var
+eval env (List (Atom "lambda" : List params : body)) =
+  makeNormalFunc env params body
+eval env (List (Atom "lambda" : DottedList params varargs : body)) =
+  makeVarArgs varargs env params body
+eval env (List (Atom "lambda" : varargs@(Atom _) : body)) =
+  makeVarArgs varargs env [] body
+eval env (List (func : args)) = do
+  fn      <- eval env func
+  argVals <- mapM (eval env) args
+  apply fn argVals
 eval env badForm =
   throwError $ BadSpecialForm "Unrecognized special form" badForm
 
-apply :: String -> [LispVal] -> Either LispError LispVal
-apply func args =
-  maybe (Left $ NotFunction "Unrecognized primitive function" func) ($ args)
-    $ lookup func primitives
+apply :: LispVal -> [LispVal] -> IOThrowsError LispVal
+apply (PrimitiveFunc func) args = liftIOThrows $ func args
+apply (Func params vararg body closure) args =
+  if num params /= num args && vararg == Nothing
+    then throwError $ NumArgs (num params) args
+    else
+      (liftIO $ bindVars closure $ zip params args)
+      >>= bindVarArgs vararg
+      >>= evalBody
+ where
+  remainingArgs = drop (length params) args
+  num           = toInteger . length
+  evalBody env = liftM last $ mapM (eval env) body
+  bindVarArgs arg env = case arg of
+    Just argName -> liftIO $ bindVars env [(argName, List $ remainingArgs)]
+    Nothing      -> return env
