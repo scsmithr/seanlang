@@ -51,11 +51,14 @@ unwordsList :: [LispVal] -> String
 unwordsList = unwords . map show
 
 eval :: LispVal -> Either LispError LispVal
-eval val@(String _                  ) = return val
-eval val@(Number _                  ) = return val
-eval val@(Bool   _                  ) = return val
-eval (    List   [Atom "quote", val]) = return val
-eval (    List   (Atom func : args) ) = mapM eval args >>= apply func
+eval val@(String _                             ) = return val
+eval val@(Number _                             ) = return val
+eval val@(Bool   _                             ) = return val
+eval (    List   [Atom "quote", val]           ) = return val
+eval (    List   [Atom "if", pred, conseq, alt]) = eval pred >>= \r -> case r of
+  Bool False -> eval alt
+  _          -> eval conseq
+eval (List (Atom func : args)) = mapM eval args >>= apply func
 eval badForm = Left $ BadSpecialForm "Unrecognized special form" badForm
 
 apply :: String -> [LispVal] -> Either LispError LispVal
@@ -72,6 +75,19 @@ primitives =
   , ("mod"      , numericBinop mod)
   , ("quotient" , numericBinop quot)
   , ("remainder", numericBinop rem)
+  , ("="        , numBoolBinop (==))
+  , ("<"        , numBoolBinop (<))
+  , (">"        , numBoolBinop (>))
+  , ("/="       , numBoolBinop (/=))
+  , (">="       , numBoolBinop (>=))
+  , ("<="       , numBoolBinop (<=))
+  , ("&&"       , boolBoolBinop (&&))
+  , ("||"       , boolBoolBinop (||))
+  , ("string=?" , strBoolBinop (==))
+  , ("string<?" , strBoolBinop (<))
+  , ("string>?" , strBoolBinop (>))
+  , ("string<=?", strBoolBinop (<=))
+  , ("string>=?", strBoolBinop (>=))
   ]
 
 numericBinop
@@ -79,6 +95,22 @@ numericBinop
 numericBinop op [] = Left $ NumArgs 2 []
 numericBinop op singleVal@[_] = Left $ NumArgs 2 singleVal
 numericBinop op params = mapM unpackNum params >>= return . Number . foldl1 op
+
+boolBinop
+  :: (LispVal -> Either LispError a)
+  -> (a -> a -> Bool)
+  -> [LispVal]
+  -> Either LispError LispVal
+boolBinop unpacker op args = if length args /= 2
+  then Left $ NumArgs 2 args
+  else do
+    left  <- unpacker $ args !! 0
+    right <- unpacker $ args !! 1
+    return $ Bool $ op left right
+
+numBoolBinop = boolBinop unpackNum
+strBoolBinop = boolBinop unpackStr
+boolBoolBinop = boolBinop unpackBool
 
 unpackNum :: LispVal -> Either LispError Integer
 unpackNum (Number n) = return n
@@ -89,6 +121,16 @@ unpackNum (String n) =
         else return $ fst $ parsed !! 0
 unpackNum (List [n]) = unpackNum n
 unpackNum notNum     = Left $ TypeMismatch "number" notNum
+
+unpackBool :: LispVal -> Either LispError Bool
+unpackBool (Bool b) = return b
+unpackBool notBool  = Left $ TypeMismatch "boolean" notBool
+
+unpackStr :: LispVal -> Either LispError String
+unpackStr (String s) = return s
+unpackStr (Number s) = return $ show s
+unpackStr (Bool   s) = return $ show s
+unpackStr notString  = Left $ TypeMismatch "string" notString
 
 parseString :: P.Parser LispVal
 parseString = do
