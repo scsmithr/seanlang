@@ -27,7 +27,6 @@ library
       Environment
       Lib
       Parser
-      Primitives
   other-modules:
       Paths_seanlang
   hs-source-dirs:
