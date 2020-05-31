@@ -1,7 +1,9 @@
 module Main where
 
 import           Parser
+import           Environment
 import           Control.Monad
+import           Control.Monad.Except
 import           System.Environment
 import           System.IO
 
@@ -11,13 +13,19 @@ flushStr str = putStr str >> hFlush stdout
 readPrompt :: String -> IO String
 readPrompt prompt = flushStr prompt >> getLine
 
-evalString :: String -> IO String
-evalString expr = case readExpr expr >>= eval of
-  Left  err -> return $ "Error: " ++ show err
-  Right val -> return $ show val
+extractValue :: Either LispError a -> a
+extractValue (Right val) = val
 
-evalAndPrint :: String -> IO ()
-evalAndPrint expr = evalString expr >>= putStrLn
+runIOThrows :: IOThrowsError String -> IO String
+runIOThrows action = runExceptT (trapError action) >>= return . extractValue
+  where trapError action' = catchError action' (return . show)
+
+evalString :: Env -> String -> IO String
+evalString env expr =
+  runIOThrows $ liftM show $ (liftIOThrows $ readExpr expr) >>= eval env
+
+evalAndPrint :: Env -> String -> IO ()
+evalAndPrint env expr = evalString env expr >>= putStrLn
 
 until_ :: Monad m => (a -> Bool) -> m a -> (a -> m ()) -> m ()
 until_ pred prompt action = do
@@ -25,13 +33,16 @@ until_ pred prompt action = do
   if pred result then return () else action result >> until_ pred prompt action
 
 runRepl :: IO ()
-runRepl = until_ (== "quit") (readPrompt "Lisp>>> ") evalAndPrint
+runRepl = nullEnv >>= until_ (== "quit") (readPrompt "Lisp>>> ") . evalAndPrint
+
+runOne :: String -> IO ()
+runOne expr = nullEnv >>= flip evalAndPrint expr
 
 main :: IO ()
 main = do
   args <- getArgs
   case length args of
     0 -> runRepl
-    1 -> evalAndPrint (args !! 0)
+    1 -> runOne (args !! 0)
     _ -> putStrLn "0 or 1 args"
 

@@ -24,8 +24,10 @@ source-repository head
 
 library
   exposed-modules:
+      Environment
       Lib
       Parser
+      Primitives
   other-modules:
       Paths_seanlang
   hs-source-dirs:
